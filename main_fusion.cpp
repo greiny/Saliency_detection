@@ -6,6 +6,8 @@
 #include <sstream>
 #include <vector>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/cudaimgproc.hpp>
 
 using namespace cv;
 using namespace std;
@@ -20,16 +22,20 @@ int main()
 {
 	bool flag=1;
 	Mat frame;
-	vector<Mat> kernels(4);
-	for(int k=0; k<kernels.size(); k++) kernels[k] = getGaborKernel(Size(20,20),1, CV_PI/4*k, 30, 0,CV_PI/2);
+	vector<cuda::GpuMat> kernels(4);
+	for(int k=0; k<kernels.size(); k++) {
+		Mat kernel = getGaborKernel(Size(20,20),1, CV_PI/4*k, 30, 0,CV_PI/2);
+		kernel.convertTo(kernel,CV_32F);
+		kernels[k].upload(kernel);
+	}
 
 	capture >> frame;
 	int width = frame.cols;
 	int height = frame.rows;
 	int cv_type = frame.type();
 
-	VideoWriter video("out.avi",CV_FOURCC('M','J','P','G'),20, Size(width*3,height),true);
-	VideoWriter video2("out2.avi",CV_FOURCC('M','J','P','G'),20, Size(width*3,height),true);
+	VideoWriter video("fusion.avi",CV_FOURCC('M','J','P','G'),20, Size(width*3,height),true);
+	VideoWriter video2("fusion2.avi",CV_FOURCC('M','J','P','G'),20, Size(width*3,height),true);
 
 	// Time checking start
 	int frames = 0;
@@ -55,31 +61,60 @@ int main()
 			vector<vector<Mat>> Pyr_C(2); //Pyr_C[#BGR][#pyr]
 			vector<vector<Mat>> Pyr_O(4); //Pyr_O[#theta][#pyr]
 			for(int i=0; i<GausnPyr.size(); i++) {
-				vector<Mat> vtemp(3);
-				split(GausnPyr[i], vtemp);
+				cuda::GpuMat Pyr(GausnPyr[i]);
+				cuda::GpuMat cuda_temp;
+				vector<cuda::GpuMat> vtemp(3);
+				cuda::split(Pyr, vtemp);
 
 				// Make Intensity Map -> #1
-				Pyr_I[i] = (vtemp[0]+vtemp[1]+vtemp[2])/3; //Blue
+				cuda::add(vtemp[0],vtemp[1],cuda_temp);
+				cuda::add(cuda_temp,vtemp[2],cuda_temp);
+				cuda::divide(cuda_temp,3,cuda_temp);
+				cuda_temp.download(Pyr_I[i]);
 
 				// Make Color Map -> #2
-				//Mat B = vtemp[0]-(vtemp[1]+vtemp[2])/2; //Blue
-				//Mat Y = (vtemp[2]+vtemp[1])/2-abs((vtemp[2]-vtemp[1])/2)-vtemp[0]; //Yellow
-				//Mat R = vtemp[2]-(vtemp[1]+vtemp[0])/2; //Red
-				//Mat G = vtemp[1]-(vtemp[0]+vtemp[2])/2; //Green
-				Mat B = vtemp[0]; //Blue
-				Mat Y = (vtemp[2]+vtemp[1])/2; //Yellow
-				Mat R = vtemp[2]; //Red
-				Mat G = vtemp[1]; //Green
-				Pyr_C[0].push_back((Mat)(B-Y));
-				Pyr_C[1].push_back((Mat)(R-G));
+				cuda::GpuMat B;
+				cuda::add(vtemp[1],vtemp[2],cuda_temp);
+				cuda::divide(cuda_temp,2,cuda_temp);
+				cuda::subtract(vtemp[0],cuda_temp, B);
+				cuda::GpuMat Y;
+				cuda::subtract(vtemp[2],vtemp[1],cuda_temp);
+				cuda::divide(cuda_temp,2,cuda_temp);
+				cuda::abs(cuda_temp,Y);
+				cuda::add(vtemp[1],vtemp[2],cuda_temp);
+				cuda::divide(cuda_temp,2,cuda_temp);
+				cuda::subtract(cuda_temp,Y,Y);
+				cuda::subtract(Y,vtemp[0],Y);
+				cuda::GpuMat R;
+				cuda::add(vtemp[0],vtemp[1],cuda_temp);
+				cuda::divide(cuda_temp,2,cuda_temp);
+				cuda::subtract(vtemp[2],cuda_temp,R);
+				cuda::GpuMat G;
+				cuda::add(vtemp[0],vtemp[2],cuda_temp);
+				cuda::divide(cuda_temp,2,cuda_temp);
+				cuda::subtract(vtemp[1],cuda_temp,G);
+				cuda::subtract(B,Y,cuda_temp);
+				Mat cvt;
+				cuda_temp.download(cvt);
+				Pyr_C[0].push_back(cvt);
+				cuda::subtract(R,G,cuda_temp);
+				cuda_temp.download(cvt);
+				Pyr_C[1].push_back(cvt);
 				vtemp.clear();
 
-
 				// Make Orientation Map -> #4
+				Ptr<cuda::Convolution> convolver = cuda::createConvolution(Size(kernels[0].cols,kernels[0].rows));
+				Mat buf1;
+				Pyr_I[i].convertTo(buf1,CV_32F);
+				cuda::GpuMat gtemp;
+				gtemp.upload(buf1);
 				for(int k=0; k<Pyr_O.size(); k++){
-					Mat buf;
-					filter2D(Pyr_I[i], buf, CV_32F, kernels[k]);
-					Pyr_O[k].push_back(buf);
+					Mat temp;
+					cuda::GpuMat buf2;
+					cuda::copyMakeBorder(gtemp,buf2,kernels[k].cols/2,kernels[k].rows/2,kernels[k].cols/2,kernels[k].rows/2,BORDER_REFLECT_101);
+					convolver->convolve(buf2,kernels[k],buf2,true);
+					buf2.download(temp);
+					Pyr_O[k].push_back(temp);
 				}
 			}
 			GausnPyr.clear();
@@ -87,21 +122,15 @@ int main()
 			// Step 3. Center-Surrounded Difference
 			vector<Mat> CSD_I,CSD_C,CSD_O;
 			CSD_I = centerSurround(Pyr_I,Pyr_I); // 8->6
-			Pyr_I.clear();
 			for(int k=0; k<Pyr_C.size(); k++) {
 				vector<Mat> inv_Pyr_C(Pyr_C[k].size());
-				for(int l=0; l<Pyr_C[k].size(); l++) inv_Pyr_C[l] = -Pyr_C[k][l];
+				for(int l=0; l<Pyr_C[k].size(); l++) inv_Pyr_C[l] = abs(-Pyr_C[k][l]);
 				Pyr_C[k] = centerSurround(Pyr_C[k],inv_Pyr_C); //R-G and G-R, B-Y and Y-B
-				for(int l=0; l<Pyr_C[k].size(); l++) CSD_C.push_back(Pyr_C[k][l]);
-				Pyr_C[k].clear();
 			}
-			Pyr_C.clear();
-			for(int k=0; k<Pyr_O.size(); k++) {
-				Pyr_O[k] = centerSurround(Pyr_O[k],Pyr_O[k]);
-				for(int l=0; l<Pyr_O[k].size(); l++) CSD_O.push_back(Pyr_O[k][l]);
-				Pyr_O[k].clear();
-			}
-			Pyr_O.clear();
+			for(int k=0; k<Pyr_C.size(); k++) for(int l=0; l<Pyr_C[k].size(); l++) CSD_C.push_back(Pyr_C[k][l]);
+			for(int k=0; k<Pyr_O.size(); k++) Pyr_O[k] = centerSurround(Pyr_O[k],Pyr_O[k]);
+			for(int k=0; k<Pyr_O.size(); k++) for(int l=0; l<Pyr_O[k].size(); l++) CSD_O.push_back(Pyr_O[k][l]);
+			Pyr_I.clear(); Pyr_C.clear(); Pyr_O.clear();
 
 			// Step 4. Normalization
 			normalizeMap(CSD_I);
@@ -125,6 +154,7 @@ int main()
 			Point maxLoc, minLoc;
 			double maxVal, minVal;
 			minMaxLoc(Salmap,&minVal,&maxVal,&minLoc,&maxLoc);
+
 
 			//check for FPS(Frame Per Second)
 			auto t1 = std::chrono::high_resolution_clock::now();
@@ -167,7 +197,6 @@ int main()
 			flag = 1;
 		}
 	}
-	kernels.clear();
 	return 0;
 }
 
@@ -198,7 +227,7 @@ vector<Mat> centerSurround(vector<Mat>& fmap1, vector<Mat>& fmap2){
 void normalizeMap(vector<Mat>& nmap){
 	for(int i=0; i<nmap.size(); i++)
 	{
-		normalize(nmap[i],nmap[i],0,1,NORM_MINMAX,CV_32FC1);
+		normalize(nmap[i],nmap[i],0,1,NORM_MINMAX,CV_32F);
 		Scalar meanVal = mean(nmap[i]);
 		nmap[i] *= pow((1-(double)meanVal.val[0]),2);
 	}
@@ -224,8 +253,8 @@ Mat make_depth_histogram(Mat data, int width, int height)
 			else
 			{
 				rgb.at<Vec3b>(j, i)[0] = 0;
-				rgb.at<Vec3b>(j, i)[1] = 0;
-				rgb.at<Vec3b>(j, i)[2] = 0;
+				rgb.at<Vec3b>(j, i)[1] = 5;
+				rgb.at<Vec3b>(j, i)[2] = 20;
 			}
     	}
     return rgb;

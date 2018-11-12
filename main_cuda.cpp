@@ -22,6 +22,14 @@ int main()
 {
 	bool flag=1;
 	Mat frame;
+
+	vector<cuda::GpuMat> kernels(4);
+	for(int k=0; k<kernels.size(); k++) {
+		Mat kernel = getGaborKernel(Size(20,20),1, CV_PI/4*k, 30, 0,CV_PI/2);
+		kernel.convertTo(kernel,CV_32F);
+		kernels[k].upload(kernel);
+	}
+
 	capture >> frame;
 	int width = frame.cols;
 	int height = frame.rows;
@@ -98,12 +106,14 @@ int main()
 				vtemp.clear();
 
 				// Make Orientation Map -> #4
+				Ptr<cuda::Convolution> convolver = cuda::createConvolution(Size(kernels[0].cols,kernels[0].rows));
+				cuda::GpuMat buf1;
+				Pyr_I[i].convertTo(buf1,CV_32F);
 				for(int k=0; k<Pyr_O.size(); k++){
-					Mat kernel = getGaborKernel(Size(20,20),1, CV_PI/4*k, 30, 0,CV_PI/2);
-					Mat buf(Pyr_I[i]);
-					filter2D(buf, buf, CV_32F, kernel);
-					buf_gpu.upload(buf);
-					Pyr_O[k].push_back(buf_gpu);
+					cuda::GpuMat buf2;
+					cuda::copyMakeBorder(buf1,buf2,kernels[k].cols/2,kernels[k].rows/2,kernels[k].cols/2,kernels[k].rows/2,BORDER_REFLECT_101);
+					convolver->convolve(buf2,kernels[k],buf2,true);
+					Pyr_O[k].push_back(buf2);
 				}
 			}
 			GausnPyr.clear();
@@ -200,8 +210,8 @@ int main()
 			Mat ICO(Size(width*3,height),cv_type,Scalar::all(0));
 			hconcat(result, dst);
 			hconcat(fmap, ICO);
-			imshow("result",dst);
-			imshow("ICO map",ICO);
+			//imshow("result",dst);
+			//imshow("ICO map",ICO);
 			video << dst;
 			video2 << ICO;
 
