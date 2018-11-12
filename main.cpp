@@ -62,18 +62,13 @@ int main()
 				Pyr_I[i] = (vtemp[0]+vtemp[1]+vtemp[2])/3; //Blue
 
 				// Make Color Map -> #2
-				//Mat B = vtemp[0]-(vtemp[1]+vtemp[2])/2; //Blue
-				//Mat Y = (vtemp[2]+vtemp[1])/2-abs((vtemp[2]-vtemp[1])/2)-vtemp[0]; //Yellow
-				//Mat R = vtemp[2]-(vtemp[1]+vtemp[0])/2; //Red
-				//Mat G = vtemp[1]-(vtemp[0]+vtemp[2])/2; //Green
-				Mat B = vtemp[0]; //Blue
-				Mat Y = (vtemp[2]+vtemp[1])/2; //Yellow
-				Mat R = vtemp[2]; //Red
-				Mat G = vtemp[1]; //Green
+				Mat B = vtemp[0]-(vtemp[1]+vtemp[2])/2; //Blue
+				Mat Y = (vtemp[2]+vtemp[1])/2-abs((vtemp[2]-vtemp[1])/2)-vtemp[0]; //Yellow
+				Mat R = vtemp[2]-(vtemp[1]+vtemp[0])/2; //Red
+				Mat G = vtemp[1]-(vtemp[0]+vtemp[2])/2; //Green
 				Pyr_C[0].push_back((Mat)(B-Y));
 				Pyr_C[1].push_back((Mat)(R-G));
 				vtemp.clear();
-
 
 				// Make Orientation Map -> #4
 				for(int k=0; k<Pyr_O.size(); k++){
@@ -158,8 +153,8 @@ int main()
 			Mat ICO(Size(width*3,height),cv_type,Scalar::all(0));
 			hconcat(result, dst);
 			hconcat(fmap, ICO);
-			//imshow("result",dst);
-			//imshow("ICO map",ICO);
+			imshow("result",dst);
+			imshow("ICO map",ICO);
 			video << dst;
 			video2 << ICO;
 

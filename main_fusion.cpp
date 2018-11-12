@@ -61,76 +61,55 @@ int main()
 			vector<vector<Mat>> Pyr_C(2); //Pyr_C[#BGR][#pyr]
 			vector<vector<Mat>> Pyr_O(4); //Pyr_O[#theta][#pyr]
 			for(int i=0; i<GausnPyr.size(); i++) {
-				cuda::GpuMat Pyr(GausnPyr[i]);
-				cuda::GpuMat cuda_temp;
-				vector<cuda::GpuMat> vtemp(3);
-				cuda::split(Pyr, vtemp);
+				vector<Mat> vtemp(3);
+				split(GausnPyr[i], vtemp);
 
 				// Make Intensity Map -> #1
-				cuda::add(vtemp[0],vtemp[1],cuda_temp);
-				cuda::add(cuda_temp,vtemp[2],cuda_temp);
-				cuda::divide(cuda_temp,3,cuda_temp);
-				cuda_temp.download(Pyr_I[i]);
+				Pyr_I[i] = (vtemp[0]+vtemp[1]+vtemp[2])/3; //Blue
 
 				// Make Color Map -> #2
-				cuda::GpuMat B;
-				cuda::add(vtemp[1],vtemp[2],cuda_temp);
-				cuda::divide(cuda_temp,2,cuda_temp);
-				cuda::subtract(vtemp[0],cuda_temp, B);
-				cuda::GpuMat Y;
-				cuda::subtract(vtemp[2],vtemp[1],cuda_temp);
-				cuda::divide(cuda_temp,2,cuda_temp);
-				cuda::abs(cuda_temp,Y);
-				cuda::add(vtemp[1],vtemp[2],cuda_temp);
-				cuda::divide(cuda_temp,2,cuda_temp);
-				cuda::subtract(cuda_temp,Y,Y);
-				cuda::subtract(Y,vtemp[0],Y);
-				cuda::GpuMat R;
-				cuda::add(vtemp[0],vtemp[1],cuda_temp);
-				cuda::divide(cuda_temp,2,cuda_temp);
-				cuda::subtract(vtemp[2],cuda_temp,R);
-				cuda::GpuMat G;
-				cuda::add(vtemp[0],vtemp[2],cuda_temp);
-				cuda::divide(cuda_temp,2,cuda_temp);
-				cuda::subtract(vtemp[1],cuda_temp,G);
-				cuda::subtract(B,Y,cuda_temp);
-				Mat cvt;
-				cuda_temp.download(cvt);
-				Pyr_C[0].push_back(cvt);
-				cuda::subtract(R,G,cuda_temp);
-				cuda_temp.download(cvt);
-				Pyr_C[1].push_back(cvt);
+				Mat B = vtemp[0]-(vtemp[1]+vtemp[2])/2; //Blue
+				Mat Y = (vtemp[2]+vtemp[1])/2-abs((vtemp[2]-vtemp[1])/2)-vtemp[0]; //Yellow
+				Mat R = vtemp[2]-(vtemp[1]+vtemp[0])/2; //Red
+				Mat G = vtemp[1]-(vtemp[0]+vtemp[2])/2; //Green
+				Pyr_C[0].push_back((Mat)(B-Y));
+				Pyr_C[1].push_back((Mat)(R-G));
 				vtemp.clear();
 
 				// Make Orientation Map -> #4
 				Ptr<cuda::Convolution> convolver = cuda::createConvolution(Size(kernels[0].cols,kernels[0].rows));
-				Mat buf1;
-				Pyr_I[i].convertTo(buf1,CV_32F);
-				cuda::GpuMat gtemp;
-				gtemp.upload(buf1);
+				cuda::GpuMat buf1(Pyr_I[i]);
 				for(int k=0; k<Pyr_O.size(); k++){
 					Mat temp;
 					cuda::GpuMat buf2;
-					cuda::copyMakeBorder(gtemp,buf2,kernels[k].cols/2,kernels[k].rows/2,kernels[k].cols/2,kernels[k].rows/2,BORDER_REFLECT_101);
+					buf1.convertTo(buf2,CV_32F);
+					cuda::copyMakeBorder(buf2,buf2,kernels[k].cols/2,kernels[k].rows/2,kernels[k].cols/2,kernels[k].rows/2,BORDER_REFLECT_101);
 					convolver->convolve(buf2,kernels[k],buf2,true);
 					buf2.download(temp);
 					Pyr_O[k].push_back(temp);
 				}
+				buf1.release();
 			}
 			GausnPyr.clear();
 
 			// Step 3. Center-Surrounded Difference
 			vector<Mat> CSD_I,CSD_C,CSD_O;
 			CSD_I = centerSurround(Pyr_I,Pyr_I); // 8->6
+			Pyr_I.clear();
 			for(int k=0; k<Pyr_C.size(); k++) {
 				vector<Mat> inv_Pyr_C(Pyr_C[k].size());
-				for(int l=0; l<Pyr_C[k].size(); l++) inv_Pyr_C[l] = abs(-Pyr_C[k][l]);
+				for(int l=0; l<Pyr_C[k].size(); l++) inv_Pyr_C[l] = -Pyr_C[k][l];
 				Pyr_C[k] = centerSurround(Pyr_C[k],inv_Pyr_C); //R-G and G-R, B-Y and Y-B
+				for(int l=0; l<Pyr_C[k].size(); l++) CSD_C.push_back(Pyr_C[k][l]);
+				Pyr_C[k].clear();
 			}
-			for(int k=0; k<Pyr_C.size(); k++) for(int l=0; l<Pyr_C[k].size(); l++) CSD_C.push_back(Pyr_C[k][l]);
-			for(int k=0; k<Pyr_O.size(); k++) Pyr_O[k] = centerSurround(Pyr_O[k],Pyr_O[k]);
-			for(int k=0; k<Pyr_O.size(); k++) for(int l=0; l<Pyr_O[k].size(); l++) CSD_O.push_back(Pyr_O[k][l]);
-			Pyr_I.clear(); Pyr_C.clear(); Pyr_O.clear();
+			Pyr_C.clear();
+			for(int k=0; k<Pyr_O.size(); k++) {
+				Pyr_O[k] = centerSurround(Pyr_O[k],Pyr_O[k]);
+				for(int l=0; l<Pyr_O[k].size(); l++) CSD_O.push_back(Pyr_O[k][l]);
+				Pyr_O[k].clear();
+			}
+			Pyr_O.clear();
 
 			// Step 4. Normalization
 			normalizeMap(CSD_I);
@@ -188,8 +167,8 @@ int main()
 			Mat ICO(Size(width*3,height),cv_type,Scalar::all(0));
 			hconcat(result, dst);
 			hconcat(fmap, ICO);
-			//imshow("result",dst);
-			//imshow("ICO map",ICO);
+			imshow("result",dst);
+			imshow("ICO map",ICO);
 			video << dst;
 			video2 << ICO;
 

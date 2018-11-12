@@ -52,17 +52,11 @@ int main()
 		}
 		else
 		{
-			auto t00 = std::chrono::high_resolution_clock::now();
-
 			// Step 1.
 			cuda::GpuMat frame_gpu(frame.rows, frame.cols, frame.type());
 			frame_gpu.upload(frame);
 			vector<cuda::GpuMat> GausnPyr(9);
 			makeGaussianPyramid(frame_gpu,GausnPyr.size(),GausnPyr);
-
-			auto t11 = std::chrono::high_resolution_clock::now();
-			cout << "Step1: "<< std::chrono::duration<float>(t11-t00).count()<<"[s]" << endl;
-			t00 = t11;
 
 			// Step 2.
 			vector<cuda::GpuMat> Pyr_I(GausnPyr.size()); //Pyr_I[#pyr]
@@ -118,10 +112,6 @@ int main()
 			}
 			GausnPyr.clear();
 
-			t11 = std::chrono::high_resolution_clock::now();
-			cout << "Step2: "<< std::chrono::duration<float>(t11-t00).count()<<"[s]" << endl;
-			t00 = t11;
-
 			// Step 3. Center-Surrounded Difference
 			vector<cuda::GpuMat> CSD_I,CSD_C,CSD_O;
 			CSD_I = centerSurround(Pyr_I,Pyr_I); // 8->6
@@ -138,18 +128,10 @@ int main()
 			for(int k=0; k<Pyr_O.size(); k++) for(int l=0; l<Pyr_O[k].size(); l++) CSD_O.push_back(Pyr_O[k][l]);
 			Pyr_I.clear(); Pyr_C.clear(); Pyr_O.clear();
 
-			t11 = std::chrono::high_resolution_clock::now();
-			cout << "Step3: "<< std::chrono::duration<float>(t11-t00).count()<<"[s]" << endl;
-			t00 = t11;
-
 			// Step 4. Normalization
 			normalizeMap(CSD_I);
 			normalizeMap(CSD_C);
 			normalizeMap(CSD_O);
-
-			t11 = std::chrono::high_resolution_clock::now();
-			cout << "Step4: "<< std::chrono::duration<float>(t11-t00).count()<<"[s]" << endl;
-			t00 = t11;
 
 			// Step 5. Conspicuity Maps
 			cuda::GpuMat I(Size(CSD_I[0].cols,CSD_I[0].rows), CSD_I[0].type(),Scalar::all(0));
@@ -160,10 +142,6 @@ int main()
 			for(int i=0; i<CSD_C.size(); i++) cuda::add(C,CSD_C[i],C);
 			for(int i=0; i<CSD_O.size(); i++) cuda::add(O,CSD_O[i],O);
 			CSD_I.clear(); CSD_C.clear(); CSD_O.clear();
-
-			t11 = std::chrono::high_resolution_clock::now();
-			cout << "Step5: "<< std::chrono::duration<float>(t11-t00).count()<<"[s]" << endl;
-			t00 = t11;
 
 			// Step 6. Merge
 			cuda::normalize(I,I,0,255,NORM_MINMAX,CV_8UC1);
@@ -210,8 +188,8 @@ int main()
 			Mat ICO(Size(width*3,height),cv_type,Scalar::all(0));
 			hconcat(result, dst);
 			hconcat(fmap, ICO);
-			//imshow("result",dst);
-			//imshow("ICO map",ICO);
+			imshow("result",dst);
+			imshow("ICO map",ICO);
 			video << dst;
 			video2 << ICO;
 
